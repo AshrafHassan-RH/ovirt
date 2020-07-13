@@ -1,0 +1,2 @@
+name,vmflavour,type,site,cluster,class,os,nic,ip,gw,mask,system,fqdn,dns1,dns2,dns_domain
+vm01,medium_vm,generic,first,Cluster01,server,rhel_8x64,eth0,10.10.10.10, 10.10.10.1,255.255.255.0,webserver,vm01.example.com,10.10.10.2, 10.10.10.2,example.com
