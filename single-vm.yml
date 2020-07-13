@@ -1,0 +1,219 @@
+- name: Create One VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+  # Check if the name of the VM to be created passed or not, if not terminate the play with an error message
+  - name: Verify that important variables are not missing
+    fail: msg="Please enter the proper VM name to be configure"
+    when: vmchoice is undefined
+  # Check if all config files exist
+  - name: Check if passwords.yml exists
+    stat:
+      path: vars/passwords.yml
+    register: passwordsfile
+  - name: Check if file vms.csv exists
+    stat:
+      path: vars/vms.csv
+    register: vmsfile
+  - name: Check if file vmtemplates.csv exists
+    stat:
+      path: vars/vmtemplates.csv
+    register: vmtemplatesfile
+  - name: Check if file vmflavours.csv exists
+    stat:
+      path: vars/vmflavours.csv
+    register: vmflavoursfile
+  - name: Check if file permissions.csv exists
+    stat:
+      path: vars/permissions.csv
+    register: permissionsfile
+
+  # If there is a missing config file terminates the play
+  - name: Terminate the play is any variable file is missing
+    fail: msg="Variable file is missing"
+    when: passwordsfile.stat.exists is undefined or vmsfile.stat.exists is undefined or vmtemplatesfile.stat.exists is undefined or vmflavoursfile.stat.exists is undefined or permissionsfile.stat.exists is undefined 
+  - block:
+  # Parse passwords.yml file
+      - name: Include logging credentials for RHVM
+        include_vars:
+          file: vars/passwords.yml
+          name: rhvm
+  # Create the security token to authenticate to the RHVM API
+      - name: Obtain SSO token
+        ovirt_auth:
+          url: https://rhvm.example.com/ovirt-engine/api
+          username: "{{ rhvm.username }}"
+          password: "{{ rhvm.password }}"
+  # Parse Config files
+      - name: Parse vms.csv input file
+        read_csv:
+          path: vars/vms.csv
+          key: name
+        register: vms
+      - name: Parse vmtemplates.csv input file
+        read_csv:
+          path: vars/vmtemplates.csv
+        register: templates
+      - name: Parse vmflavours.csv input file
+        read_csv:
+          path: vars/vmflavours.csv
+          key: name
+        register: flavours
+  #  Extract the variables from the parsed config files
+      - name: Set VM Variables
+        set_fact:
+          vmname: "{{ item.value.name }}"
+          vmflavour: "{{ item.value.vmflavour }}"
+          sitename: "{{ item.value.site }}"
+          systemname: "{{ item.value.system }}"
+          vmtype: "{{ item.value.type }}"
+          vmcluster: "{{ item.value.cluster }}"
+          vmclass: "{{ item.value.class }}"
+          vmos: "{{ item.value.os }}"
+          vmfqdn: "{{ item.value.fqdn }}"
+          vmnic: "{{ item.value.nic }}"
+          vmgw: "{{ item.value.gw }}"
+          vmmask: "{{ item.value.mask }}"
+          cloud_init_dns1: "{{ item.value.dns1 }}"
+          cloud_init_dns2: "{{ item.value.dns2 }}"
+          cloud_init_dns_zone: "{{ item.value.dns_domain }}"
+        loop: "{{ vms.dict|dict2items }}"
+        when: item.value.name==vmchoice
+  # Verify that the VM name is already defined in the config file
+      - name: Interrupt Play beacause the VM is not defined
+        fail: msg="The VM you want to create is not defined in the config files"
+        when: vmname is undefined
+      - name: Set VM size
+        set_fact:
+           memorysize: "{{ item.value.memorysize }}"
+           guaranteedmemory: "{{ item.value.guaranteedmemory }}"
+           cpusockets: "{{ item.value.cpusockets }}"
+           cputhreads: "{{ item.value.cputhreads }}"
+           cpucores: "{{ item.value.cpucores }}"
+        loop: "{{ flavours.dict|dict2items }}"
+        when: item.value.name==vmflavour
+      - name: Set the template to be used
+        set_fact:
+          template: "{{ item.name }}"
+          template_version: "{{ item.version }}"
+        loop: "{{ templates.list }}"
+        when: item.site==sitename and item.system==systemname
+      - name: Determine the permissions needed
+        read_csv:
+          path: vars/permissions.csv
+        register: permissions
+  # Check if the VM already exists
+      - name: Check if the VM exists
+        ovirt_vm_info:
+          auth: "{{ ovirt_auth }}"
+          pattern: name= "{{ vmname }}"
+        register: result
+  # Terminate the play with an error message if the VM already exists
+      - name: Interrupt Play beacause the VM exists
+        fail: msg="The VM you want to create is already there"
+        when: result.ovirt_vms[0]['status'] is defined
+  # Create the VM
+      - name: Create VM from a template
+        ovirt_vm:
+          auth: "{{ ovirt_auth }}"
+          state: present
+          name: "{{ vmname }}"
+          memory: "{{ memorysize }}GiB"
+          memory_guaranteed: "{{ guaranteedmemory }}GiB"
+          cpu_sockets: "{{ cpusockets }}"
+          cpu_threads: "{{ cputhreads }}"
+          cpu_cores: "{{ cpucores }}"
+          template: "{{ template }}"
+          template_version: "{{ template_version }}"
+          cluster: "{{ vmcluster }}"
+          type: "{{ vmclass }}"
+          operating_system: "{{ vmos }}"
+          wait: true
+      - name: Adding special permissions if needed
+        ovirt_permission:
+          auth: "{{ ovirt_auth }}"
+          state: present
+          user_name: "{{ item.user }}"
+          authz_name: "{{ item.domain }}"
+          object_type: vm
+          object_name: "{{ vmname }}"
+          role: "{{ item.role }}"
+        loop: "{{ permissions.list }}"
+        when: item.system==systemname
+ # Power on the VM
+      - name: Boot VM if the hosting hypervisor is defined
+        ovirt_vm:
+          auth: "{{ ovirt_auth }}"
+          name: "{{ vmname }}"
+          state: running
+          cloud_init:
+            host_name: "{{ vmfqdn  }}"
+            user_name: "{{ rhvm.cloud_init_username  }}"
+            root_password: "{{ rhvm.cloud_init_password  }}"
+            dns_servers: "{{ cloud_init_dns1  }} {{ cloud_init_dns2  }}"
+            dns_search: "{{ cloud_init_dns_zone }}"
+            nic_name: "{{ vmnic  }}"
+            nic_ip_address: "{{ vmip  }}"
+            nic_gateway: "{{ vmgw  }}"
+            nic_netmask:  "{{ vmmask  }}"
+            nic_boot_protocol: static
+# Check if the VM is UP. Has The Number of Checks, or the VM is Down?
+      - name: Verify the VM is UP
+        ovirt_vm_info:
+          auth: "{{ ovirt_auth }}"
+          pattern: name= "{{ vmname }}"
+        register: result
+        until: result.ovirt_vms[0]['status'] == "up"
+        retries: 10000
+ # Verify that the SSH interface to the  VM is reachable?  - Has The Number of Checks, or the SSH interface is Down?
+      - name: Wait a maximum of 300 seconds for port 22 to become open.
+        wait_for:
+          port: 22
+          host: "{{ vmip  }}"
+          search_regex: OpenSSH
+          delay: 10
+ # Create Temporary inventory and add the new VM to it
+      - name: Make sure we can use the hostname later on
+        add_host:
+          hostname: "{{ vmip  }}"
+          ansible_host: "{{ vmname  }}"
+          ansible_ssh_user: "{{ rhvm.cloud_init_username  }}"
+          ansible_ssh_pass: "{{ rhvm.cloud_init_password  }}"
+          ansible_become_pass: "{{ rhvm.cloud_init_password  }}"
+          vmfqdn: "{{ vmfqdn  }}"
+          groups: "{{ vmchoice }}"
+    always:
+      - name: Always revoke the SSO token
+        ovirt_auth:
+          state: absent
+          ovirt_auth: "{{ ovirt_auth }}"
+- name: Post Configure One VM
+  hosts: "{{ vmchoice }}"
+  become: yes
+  tasks:
+  # Parse Config files- Delegate the task to localhost
+    - name: Parse vms.csv input file
+      read_csv:
+        path: vars/vms.csv
+        key: name
+      register: vms
+      delegate_to: localhost
+      become: no
+  # Extract the variables from the parsed config files
+    - name: Set VM Variables
+      set_fact:
+        vmname: "{{ item.value.name }}"
+        vmfqdn: "{{ item.value.fqdn }}"
+      loop: "{{ vms.dict|dict2items }}"
+      when: item.value.name==vmchoice
+  # Perform Post configuration tasks (Sample Task install sample rpm)
+    - name: Install CA RPM
+      yum:
+        name: https://https-repo/qemu-guest-agent-x86_64.rpm
+        validate_certs: no
+    - name: Enable RHV client agent
+      systemd:
+        name: qemu-guest-agent
+        state: started
+        enabled: yes
