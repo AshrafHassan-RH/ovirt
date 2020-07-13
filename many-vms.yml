@@ -1,0 +1,53 @@
+- name: Create Many VMs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+  # Check if all config files exist
+    - name: Check if passwords.yml exists
+      stat:
+        path: vars/passwords.yml
+      register: passwordsfile
+    - name: Check if file vms.csv exists
+      stat:
+        path: vars/vms.csv
+      register: vmsfile
+    - name: Check if file vmtemplates.csv exists
+      stat:
+        path: vars/vmtemplates.csv
+      register: vmtemplatesfile
+    - name: Check if file vmflavours.csv exists
+      stat:
+        path: vars/vmflavours.csv
+      register: vmflavoursfile
+    - name: Check if file permissions.csv exists
+      stat:
+        path: vars/permissions.csv
+      register: permissionsfile
+  # Check if there is a missing config file terminates the play
+    - name: Terminate the play is any variable file is missing
+      fail: msg="Variable file is missing"
+      when: passwordsfile.stat.exists is undefined or vmsfile.stat.exists is undefined or vmtemplatesfile.stat.exists is undefined or vmflavoursfile.stat.exists is undefined or permissionsfile.stat.exists is undefined 
+  # Parse Config files
+    - name: Parse vms.csv file
+      read_csv:
+        path: vars/vms.csv
+        key: name
+      register: vms
+  # All the variables are null, then terminate the play.
+    - name: Test variables used to deploy multiple VMs
+      fail: msg="Please enter either site or system"
+      when: site is undefined and system is undefined
+  # Iterate Over the first and second plays based upon the non-null variables
+    - name: Deploy VMs for certain site
+      shell:
+        cmd: ansible-playbook -e "vmchoice={{ item.value.name }}" --vault-password-file --vault-password-file /path/to/my/vault-password-file
+      loop: "{{ vms.dict|dict2items }}"
+      ignore_errors: yes
+      when: item.value.site==site and site is defined and system  is undefined
+    - name: Deploy VMs for certain system
+      shell:
+        cmd: ansible-playbook -e "vmchoice={{ item.value.name }}" --vault-password-file --vault-password-file /path/to/my/vault-password-file
+      loop: "{{ vms.dict|dict2items }}"
+      ignore_errors: yes
+      when: item.value.system==system and site is undefined and system  is defined
