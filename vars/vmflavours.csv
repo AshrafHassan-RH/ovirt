@@ -1,0 +1,2 @@
+name,memorysize,guaranteedmemory,cpusockets,cputhreads,cpucores
+medium_vm,16,16,1,1,8
