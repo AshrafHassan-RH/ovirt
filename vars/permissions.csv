@@ -1,0 +1,2 @@
+user,domain,role,system
+newuser,internal,UserVmManager,webserver
