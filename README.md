@@ -1,2 +1,2 @@
 # ovirt
-ovirt playbooks
+This repository contains playbooks developed for ovirt.
